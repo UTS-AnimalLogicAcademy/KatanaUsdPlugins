@@ -20,5 +20,15 @@
 # KIND, either express or implied. See the Apache License for the specific
 # language governing permissions and limitations under the Apache License.
 
-add_subdirectory(nodetypes)
-add_subdirectory(usdExport)
+pxr_katana_python_plugin(
+    MODULE_NAME USD.USDExport.bundle
+    PYTHON_PLUGIN_REGISTRY_FILES
+        usdExport.py
+    PYTHON_MODULE_FILES
+        UsdExport/typeConversionMaps.py
+        UsdExport/__init__.py
+        UsdExport/material.py
+    PLUGIN_TYPE Plugins
+)
+
+add_subdirectory(SuperTools)

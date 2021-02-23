@@ -120,7 +120,7 @@ PxrUsdKatanaReadMaterial(
 
     // we do this before ReadPrim because ReadPrim calls ReadBlindData
     // (primvars only) which we don't want to stomp here.
-    attrs.set("material", _GetMaterialAttr(material, data.GetCurrentTime(), 
+    attrs.set("material", _GetMaterialAttr(material, data.GetCurrentTime(),
         targetName, prmanOutputTarget, flatten));
 
     const std::string& parentPrefix = (looksGroupLocation.empty()) ?
@@ -330,6 +330,7 @@ _CreateShadingNode(
 
     GroupBuilder shdNodeAttr;
     bool validData = false;
+    TfToken id;
 
     if (UsdShadeShader shaderSchema = UsdShadeShader(shadingNode)) {
         validData = true;
@@ -340,7 +341,6 @@ _CreateShadingNode(
         // display shaders
         if (targetName == "prman")
         {
-            TfToken id;
             shaderSchema.GetIdAttr().Get(&id, currentTime);
             std::string oslIdString = id.GetString();
 
@@ -361,7 +361,6 @@ _CreateShadingNode(
         }
         else
         {
-            TfToken id;
             shaderSchema.GetIdAttr().Get(&id, currentTime);
             shdNodeAttr.set(
                     "type", FnKat::StringAttribute(id.GetString()));
@@ -410,11 +409,20 @@ _CreateShadingNode(
     }
 
     if (validData) {
+        std::string target = targetName;
+        if (targetName != "prman")
+        {
+            if (!id.IsEmpty() &&
+                id.GetString().rfind("Usd", 0) != std::string::npos)
+            {
+                target = "usd";
+            }
+        }
         if (flatten ||
             !PxrUsdKatana_IsPrimDefFromBaseMaterial(shadingNode)) {
             shdNodeAttr.set("name", FnKat::StringAttribute(handle));
             shdNodeAttr.set("srcName", FnKat::StringAttribute(handle));
-            shdNodeAttr.set("target", FnKat::StringAttribute(targetName));
+            shdNodeAttr.set("target", FnKat::StringAttribute(target));
         }
     }
 
@@ -613,6 +621,61 @@ _GetMaterialAttr(
     //
     // XXX: is this behavior unique to katana or do we stick this
     // into the schema?
+
+    std::vector<UsdShadeOutput> materialOutputs = materialSchema.GetOutputs();
+
+    for (auto& materialOutput : materialOutputs)
+    {
+        if (materialOutput.HasConnectedSource())
+        {
+            const TfToken materialOutTerminalName =
+                materialOutput.GetBaseName();
+            std::string katanaTerminalName =
+                materialOutTerminalName.GetString();
+            if (katanaTerminalName.empty())
+            {
+                continue;
+            }
+            if (TfStringStartsWith(katanaTerminalName, "glslfx:"))
+            {
+                katanaTerminalName = "usd" + katanaTerminalName.substr(7);
+                katanaTerminalName[3] = toupper(katanaTerminalName[3]);
+            }
+            else if (TfStringStartsWith(katanaTerminalName, "arnold:"))
+            {
+                // Erase the colon and make the terminal name uppercase.
+                // e.g arnold:surface becomes arnoldSurface
+                katanaTerminalName.erase(6, 1);
+                katanaTerminalName[6] = toupper(katanaTerminalName[6]);
+            }
+            else if (TfStringStartsWith(katanaTerminalName, "nsi:"))
+            {
+                katanaTerminalName = "dl" + katanaTerminalName.substr(4);
+                katanaTerminalName[4] = toupper(katanaTerminalName[4]);
+            }
+            else
+            {
+                katanaTerminalName[0] = toupper(katanaTerminalName[0]);
+                katanaTerminalName = "usd" + katanaTerminalName;
+            }
+            UsdShadeConnectableAPI materialOutSource;
+            TfToken sourceName;
+            UsdShadeAttributeType sourceType;
+            materialOutput.GetConnectedSource(&materialOutSource, &sourceName,
+                                              &sourceType);
+            UsdShadeShader shader = UsdShadeShader(materialOutSource.GetPrim());
+            const SdfPath& connectedShaderPath = materialOutSource.GetPath();
+            const std::string katanaTerminalPortName =
+                katanaTerminalName + "Port";
+            terminalsBuilder.set(
+                katanaTerminalName.c_str(),
+                FnKat::StringAttribute(connectedShaderPath.GetName()));
+            terminalsBuilder.set(
+                katanaTerminalPortName.c_str(),
+                FnKat::StringAttribute(katanaTerminalName));
+        }
+    }
+
     std::stack<UsdPrim> dfs;
     dfs.push(materialPrim);
     while (!dfs.empty()) {
@@ -630,13 +693,6 @@ _GetMaterialAttr(
                 // works, along with partial composition
                 std::string handle = _CreateShadingNode(curr, currentTime,
                         nodesBuilder, interfaceBuilder, targetName, flatten);
-
-                // set the name of the preview shader for Katana to pick up
-                // TODO
-                // preview surfaces seem to come last, so are always the final string attribute set here
-                // but ideally, this should detect if the current UsdShadeShader prim (curr) is actually
-                // representative of a preview surface (don't know how to do that)
-                terminalsBuilder.set("usdPreviewSurface", FnKat::StringAttribute(handle));
             }
 
             if (!curr.IsA<UsdGeomScope>()) {
@@ -671,7 +727,7 @@ _GetMaterialAttr(
         }
         materialBuilder.set("usd", statements);
     }
-    
+
 
     FnAttribute::GroupAttribute localMaterialAttr = materialBuilder.build();
 
@@ -695,7 +751,7 @@ _GetMaterialAttr(
             if (UsdShadeMaterial baseMaterial = UsdShadeMaterial::Get(stage, baseMaterialPath)) {
                 // Make a fake context to grab parent data, and recurse on that
                 FnKat::GroupAttribute parentMaterial = _GetMaterialAttr(
-                    baseMaterial, currentTime, targetName, 
+                    baseMaterial, currentTime, targetName,
                     prmanOutputTarget, true);
                 FnAttribute::GroupBuilder flatMaterialBuilder;
                 flatMaterialBuilder.update(parentMaterial);
